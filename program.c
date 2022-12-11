@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <SDL.h>
 #include <SDL_ttf.h>
+
 #include <stdint.h>
 #include <math.h>
 #include <complex.h>
@@ -10,55 +11,61 @@
 #define MAX_HEIGHT 640
 #define CHANNELS 3
 
-uint8_t pixels[MAX_HEIGHT][MAX_WIDTH][CHANNELS];
+#define CONTROLLER_MAXIMUM 32768
+#define CONTROLLER_OFFSET_SCALAR 0.1
 
-float normalize_int(int value, int min, int max, float out_min, float out_max) {
-  return (float)(value - min) / (float)(max - min) * (out_max - out_min) + out_min;
+uint8_t pixels[MAX_HEIGHT * MAX_WIDTH * CHANNELS];
+
+double normalise_int(int value, int min, int max, double out_min, double out_max) {
+  return (double)(value - min) / (double)(max - min) * (out_max - out_min) + out_min;
 }
 
+int mandelbrot(double x, double y) {
+  double c_real = x;
+  double c_imag = y;
+  double z_real = 0;
+  double z_imag = 0;
 
+  int iterations = 0;
+  int max_iterations = 150;
 
-uint8_t mandelbrot(float x, float y) {
-  // Set the starting point for the iteration
-  complex float c = x + y * I;
-  complex float z = 0.0 + 0.0 * I;
+  double z_real_squared = 0;
+  double z_imag_squared = 0;
 
-  // Set the maximum number of iterations
-  int max_iterations = 255;
-
-  // Iterate until the point escapes or the maximum number of iterations is reached
-  int i;
-  for (i = 0; i < max_iterations && cabs(z) < 2.0; i++) {
-    z = z * z + c;
+  while (z_real_squared + z_imag_squared < 4 && iterations < max_iterations) {
+    z_real_squared = z_real * z_real;
+    z_imag_squared = z_imag * z_imag;
+    z_imag = 2 * z_real * z_imag + c_imag;
+    z_real = z_real_squared - z_imag_squared + c_real;
+    iterations++;
   }
 
-  // Set the color based on the number of iterations
-  return (uint8_t)i;
+  return iterations;
 }
 
-
-
-void colormap(uint8_t intensity, uint8_t *r, uint8_t *g, uint8_t *b) {
-  // Check if intensity is within valid range [0, 255]
-  if (intensity > 255) intensity = 255;
-  if (intensity < 0) intensity = 0;
-
-  // Map intensity to a color value using a simple linear scale
-  *r = (uint8_t) (255 - intensity);
-  *g = (uint8_t) (intensity * 0.5);
-  *b = (uint8_t) (intensity * 0.25);
+void colourmap(uint8_t intensity, uint8_t *r, uint8_t *g, uint8_t *b) {
+  *r = intensity;
+  *g = intensity;
+  *b = intensity;
 }
 
 
 int main(int argc, char *argv[]) {
     SDL_Window *window = NULL;
     SDL_Renderer *renderer = NULL;
+    TTF_Font* font = NULL;
     SDL_Surface *surface;
+    SDL_Surface *text_surface;
     SDL_Texture *texture;
 
-    float fps;
-    int width = MAX_WIDTH;
+    SDL_Color text_colour = {0, 255, 0};
+
+    int width = 640;
     int height = 480;
+    double xoffset = 0, yoffset = 0;
+    double zoom = 1;
+    double fps = 0;
+    char fps_text[20] = "fps: ";
 
     // Initialize SDL
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) < 0) {
@@ -76,6 +83,20 @@ int main(int argc, char *argv[]) {
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     if (renderer == NULL) {
         printf("Error creating renderer: %s\n", SDL_GetError());
+        return 1;
+    }
+
+    //Initialize SDL_ttf
+    if( TTF_Init() == -1 )
+    {
+        printf( "SDL_ttf could not initialize! SDL_ttf Error: %s\n", TTF_GetError() );
+        return 1;
+    }
+
+    font = TTF_OpenFont("arial.ttf", 28 );
+    if (font == NULL)
+    {
+        fprintf(stderr, "Error: failed to load font: %s\n", TTF_GetError());
         return 1;
     }
 
@@ -110,33 +131,48 @@ int main(int argc, char *argv[]) {
                 switch (event.key.keysym.sym)
                 case SDLK_ESCAPE: goto exit;
             }
-            if (event.type == SDL_CONTROLLERAXISMOTION) {
-                printf("Axis %d moved to %f\n", event.caxis.axis, normalize_int(event.caxis.value, -32768, 32768, -1, 1));
-            }
         }
 
-        // Do some stuff
-        for (int i=0; i<height; i++)
+        int16_t xaxis = SDL_GameControllerGetAxis(controller, 0);
+        int16_t yaxis = SDL_GameControllerGetAxis(controller, 1);
+        int16_t ltrigger = SDL_GameControllerGetAxis(controller, 4);
+        int16_t rtrigger = SDL_GameControllerGetAxis(controller, 5);
+
+        xoffset += normalise_int(xaxis, -CONTROLLER_MAXIMUM, CONTROLLER_MAXIMUM, -CONTROLLER_OFFSET_SCALAR * zoom, CONTROLLER_OFFSET_SCALAR * zoom);
+        yoffset += normalise_int(yaxis, -CONTROLLER_MAXIMUM, CONTROLLER_MAXIMUM, -CONTROLLER_OFFSET_SCALAR * zoom, CONTROLLER_OFFSET_SCALAR * zoom);
+        zoom *= normalise_int(ltrigger, -CONTROLLER_MAXIMUM, CONTROLLER_MAXIMUM, 0.1, 2);
+        zoom /= normalise_int(rtrigger, -CONTROLLER_MAXIMUM, CONTROLLER_MAXIMUM, 0.1, 2);
+
+        // Modify the pixel grid for display
+        for (int p=0; p<height*width*CHANNELS; p+=CHANNELS)
         {
-            for (int j=0; j<width; j++)
-            {
-                float y = normalize_int(i, 0, height, -1, 1);
-                float x = normalize_int(j, 0, width, -1, 1);
+            // Get row, column from index
+            int j = (p / CHANNELS) % width;
+            int i = p / (CHANNELS * width);
 
-                uint8_t r, g, b;
+            // Calculate Mandelbrot
+            double y = normalise_int(i, 0, height, -zoom, zoom);
+            double x = normalise_int(j, 0, width, -zoom, zoom);
+            uint8_t intensity = mandelbrot(x + xoffset, y + yoffset);
 
-                uint8_t intensity = mandelbrot(x, y);
-                colormap(intensity, &r, &g, &b);
+            // Convert to colourmap
+            uint8_t r, g, b;
+            colourmap(intensity, &r, &g, &b);
 
-                pixels[i][j][0] = r;
-                pixels[i][j][1] = g;
-                pixels[i][j][2] = b;
-            }
+            pixels[p    ] = r;
+            pixels[p + 1] = g;
+            pixels[p + 2] = b;
         }
 
         // Clear the screen
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
+
+        // Render font
+
+        sprintf(fps_text+5, "%.2f", fps);
+        text_surface = TTF_RenderText_Solid(font, fps_text,text_colour);
+        SDL_BlitSurface(text_surface, NULL, surface, NULL);
 
         // Display pixel array
         texture = SDL_CreateTextureFromSurface(renderer, surface);
@@ -149,7 +185,6 @@ int main(int argc, char *argv[]) {
         // Get end ticks for fps
         uint32_t frame_time = SDL_GetTicks()-start_time;
         fps = (frame_time > 0) ? 1000.0f / frame_time : 0.0f;
-        printf("FPS: %f\n", fps);
     }
 
     exit:
