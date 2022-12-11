@@ -27,7 +27,7 @@ int mandelbrot(double x, double y) {
   double z_imag = 0;
 
   int iterations = 0;
-  int max_iterations = 150;
+  int max_iterations = 200;
 
   double z_real_squared = 0;
   double z_imag_squared = 0;
@@ -43,10 +43,28 @@ int mandelbrot(double x, double y) {
   return iterations;
 }
 
-void colourmap(uint8_t intensity, uint8_t *r, uint8_t *g, uint8_t *b) {
-  *r = intensity;
-  *g = intensity;
-  *b = intensity;
+void colourmap(double intensity, uint8_t *red, uint8_t *green, uint8_t *blue) {
+  if (intensity < 0.25) {
+    // black to blue
+    *red = 0;
+    *green = 0;
+    *blue = (int)(intensity * 4 * 255);
+  } else if (intensity < 0.5) {
+    // blue to green
+    *red = 0;
+    *green = (int)((intensity - 0.25) * 4 * 255);
+    *blue = 255;
+  } else if (intensity < 0.75) {
+    // green to yellow
+    *red = (int)((intensity - 0.5) * 4 * 255);
+    *green = 255;
+    *blue = 255 - (int)((intensity - 0.5) * 4 * 255);
+  } else {
+    // yellow to white
+    *red = 255;
+    *green = 255;
+    *blue = (int)((1 - intensity) * 4 * 255);
+  }
 }
 
 
@@ -157,7 +175,7 @@ int main(int argc, char *argv[]) {
 
             // Convert to colourmap
             uint8_t r, g, b;
-            colourmap(intensity, &r, &g, &b);
+            colourmap((double)intensity / 255, &r, &g, &b);
 
             pixels[p    ] = r;
             pixels[p + 1] = g;
