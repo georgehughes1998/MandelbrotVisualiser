@@ -3,6 +3,9 @@
 #include <SDL.h>
 #include <SDL_ttf.h>
 
+#define CL_TARGET_OPENCL_VERSION 300
+#include <CL/cl.h>
+
 #include <stdint.h>
 #include <math.h>
 #include <complex.h>
@@ -78,12 +81,62 @@ int main(int argc, char *argv[]) {
 
     SDL_Color text_colour = {0, 255, 0};
 
-    int width = 640;
-    int height = 480;
+    int width = 540;
+    int height = 360;
     double xoffset = 0, yoffset = 0;
     double zoom = 1;
     double fps = 0;
     char fps_text[20] = "fps: ";
+
+    // Get the platform ID and the number of platforms
+    cl_platform_id platform_id;
+    cl_uint num_platforms;
+    cl_int error = clGetPlatformIDs(1, &platform_id, &num_platforms);
+    if (error != CL_SUCCESS) {
+    printf("Error getting platform ID: %d\n", error);
+    return 1;
+    }
+
+    // Get the device IDs and the number of devices for each platform
+    cl_device_id *device_ids;
+    cl_uint num_devices;
+    error = clGetDeviceIDs(platform_id, CL_DEVICE_TYPE_ALL, 0, NULL, &num_devices);
+    if (error != CL_SUCCESS) {
+    printf("Error getting number of devices: %d\n", error);
+    return 1;
+    }
+
+    device_ids = malloc(sizeof(cl_device_id) * num_devices);
+    error = clGetDeviceIDs(platform_id, CL_DEVICE_TYPE_ALL, num_devices, device_ids, NULL);
+    if (error != CL_SUCCESS) {
+    printf("Error getting device IDs: %d\n", error);
+    return 1;
+    }
+
+    // Log the device information
+    for (int i = 0; i < num_devices; i++) {
+    // Get the device name
+    size_t size;
+    error = clGetDeviceInfo(device_ids[i], CL_DEVICE_NAME, 0, NULL, &size);
+    if (error != CL_SUCCESS) {
+      printf("Error getting device name size: %d\n", error);
+      continue;
+    }
+
+    char *name = malloc(size);
+    error = clGetDeviceInfo(device_ids[i], CL_DEVICE_NAME, size, name, NULL);
+    if (error != CL_SUCCESS) {
+      printf("Error getting device name: %d\n", error);
+      continue;
+    }
+
+    // Log the device name
+    printf("Device %d: %s\n", i, name);
+
+    free(name);
+    }
+
+    free(device_ids);
 
     // Initialize SDL
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) < 0) {
