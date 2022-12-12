@@ -19,76 +19,108 @@
 #define CONTROLLER_OFFSET_SCALAR 0.08
 
 const char *kernel_string =
-"int mandelbrot(double x, double y) {"
-    "double c_real = x;"
-    "double c_imag = y;"
-    "double z_real = 0;"
-    "double z_imag = 0;"
+"#define MAX_ITERATIONS 750\n"
 
-    "int iterations = 0;"
-    "int max_iterations = 800;"
+"__constant long FIXED_POINT_SHIFT = 30L;"
+"__constant long FIXED_POINT_SCALE = (1L << FIXED_POINT_SHIFT);"
+"__constant long FIXED_POINT_ONE = (1L << FIXED_POINT_SHIFT);"
+"__constant long FIXED_POINT_TWO = (2L << FIXED_POINT_SHIFT);"
+"__constant long FIXED_POINT_FOUR = (4L << FIXED_POINT_SHIFT);"
 
-    "double z_real_squared = 0;"
-    "double z_imag_squared = 0;"
+"typedef long fixed64;"
 
-    "while (z_real_squared + z_imag_squared < 4 && iterations <= max_iterations) {"
-        "z_real_squared = z_real * z_real;"
-        "z_imag_squared = z_imag * z_imag;"
-        "z_imag = 2 * z_real * z_imag + c_imag;"
+"fixed64 float_to_fixed(float value) {"
+    "return (fixed64)(value * FIXED_POINT_SCALE);"
+"}"
+
+"fixed64 long_to_fixed(long value) {"
+    "return (fixed64)(value << FIXED_POINT_SHIFT);"
+"}"
+
+"fixed64 div_fixed2(fixed64 a, fixed64 b) {"
+    "return (a / b) << FIXED_POINT_SHIFT;"
+"}"
+
+"fixed64 mult_fixed(fixed64 a, fixed64 b) {"
+    "if (a + b > FIXED_POINT_FOUR)"
+        "return FIXED_POINT_FOUR;"
+    "return (a * b) >> FIXED_POINT_SHIFT;"
+"}"
+
+"uint mandelbrot(fixed64 x, fixed64 y) {"
+    "fixed64 c_real = x;"
+    "fixed64 c_imag = y;"
+    "fixed64 z_real = 0;"
+    "fixed64 z_imag = 0;"
+    "uint iterations = MAX_ITERATIONS;"
+
+    "fixed64 z_real_squared = 0;"
+    "fixed64 z_imag_squared = 0;"
+
+    "while (z_real_squared + z_imag_squared < FIXED_POINT_FOUR && iterations > 0) {"
+        "z_real_squared = mult_fixed(z_real, z_real);"
+        "z_imag_squared = mult_fixed(z_imag, z_imag);"
+        "z_imag = mult_fixed(FIXED_POINT_TWO, mult_fixed(z_real, z_imag)) + c_imag;"
         "z_real = z_real_squared - z_imag_squared + c_real;"
-        "iterations++;"
+        "iterations--;"
     "}"
 
   "return iterations;"
 "}"
 
-"double normalise_int(int value, int min, int max, double out_min, double out_max) {"
-    "return (double)(value - min) / (double)(max - min) * (out_max - out_min) + out_min;"
+"fixed64 normalise_long(long value, long min, long max, fixed64 out_min, fixed64 out_max) {"
+    "return ((value - min) * (out_max - out_min)) / (max - min) + out_min;"
 "}"
 
-"void colourmap(int iintensity, uchar *red, uchar *green, uchar *blue) {"
-  "double intensity = normalise_int(iintensity, 0, 800, 0, 1);"
-  "if (intensity < 0.25) {"
+"uint normalise_uint(uint value, uint min, uint max, uint out_min, uint out_max) {"
+  "return ((value - min) * (out_max - out_min)) / (max - min) + out_min;"
+"}"
+
+"void colourmap(uint iintensity, uchar *red, uchar *green, uchar *blue) {"
+  "uint intensity = normalise_uint(iintensity, 0, MAX_ITERATIONS, 0, 255);"
+  "if (intensity < 64) {"
     "// black to blue\n"
     "*red = 0;"
     "*green = 0;"
-    "*blue = (uchar)(intensity * 4 * 255);"
-  "} else if (intensity < 0.5) {"
+    "*blue = intensity;"
+  "} else if (intensity < 128) {"
     "// blue to green\n"
     "*red = 0;"
-    "*green = (uchar)((intensity - 0.25) * 4 * 255);"
+    "*green = intensity - 64;"
     "*blue = 255;"
-  "} else if (intensity < 0.75) {"
+  "} else if (intensity < 196) {"
     "// green to yellow\n"
-    "*red = (uchar)((intensity - 0.5) * 4 * 255);"
+    "*red = (intensity - 128);"
     "*green = 255;"
-    "*blue = 255 - (uchar)((intensity - 0.5) * 4 * 255);"
+    "*blue = 255 - (intensity - 128);"
   "} else {"
     "// yellow to white\n"
     "*red = 255;"
     "*green = 255;"
-    "*blue = (uchar)((1 - intensity) * 4 * 255);"
+    "*blue = 255 - intensity;"
   "}"
 "}"
 
 "__kernel void mandelbrot_kernel(__global uchar *out,"
                                  "uint height,"
                                  "uint width,"
-                                 "double xoffset,"
-                                 "double yoffset,"
-                                 "double zoom"
+                                 "float xoffset,"
+                                 "float yoffset,"
+                                 "float zoom"
 ")"
 "{"
     "//Get the index of the work-item\n"
     "long index = get_global_id(0) * 3;"
 
     "// Get row, column from index\n"
-    "long j = (index / 3) % width;"
-    "long i = index / (3 * width);"
+    "long j = (index / 3L) % width;"
+    "long i = index / (3L * width);"
 
-    "double y = normalise_int(i, 0, height, -zoom, zoom);"
-    "double x = normalise_int(j, 0, width, -zoom, zoom);"
-    "int intensity = mandelbrot(x + xoffset, y + yoffset);"
+    "fixed64 fzoom = float_to_fixed(zoom);"
+
+    "fixed64 y = normalise_long(i, 0L, (long)height, -fzoom, fzoom);"
+    "fixed64 x = normalise_long(j, 0L, (long)width, -fzoom, fzoom);"
+    "uint intensity = mandelbrot(x + float_to_fixed(xoffset), y + float_to_fixed(yoffset));"
 
     "// Convert to colourmap\n"
     "uchar r, g, b;"
@@ -115,13 +147,12 @@ int main(int argc, char *argv[]) {
 
     SDL_Color text_colour = {0, 255, 0};
 
-    cl_uint width = 1280;
+    cl_uint width = 960;
     cl_uint height = 720;
-    cl_double xoffset = 0, yoffset = 0;
-    cl_double zoom = 1;
+    cl_float xoffset = 0, yoffset = 0;
+    cl_float zoom = 1;
     double fps = 0;
     char fps_text[20] = "fps: ";
-
 
     // Get the platform ID and the number of platforms
     cl_platform_id platform_id;
@@ -170,7 +201,7 @@ int main(int argc, char *argv[]) {
 
         free(name);
     }
-    cl_device_id device_id = device_ids[1];
+    cl_device_id device_id = device_ids[0];
 
     cl_context context;
     context = clCreateContext( NULL, num_devices, device_ids, NULL, NULL, &error);
@@ -231,7 +262,7 @@ int main(int argc, char *argv[]) {
         printf("Error creating window: %s\n", SDL_GetError());
         return 1;
     }
-    SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN);
+    // SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN);
 
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     if (renderer == NULL) {
@@ -300,9 +331,9 @@ int main(int argc, char *argv[]) {
         error = clSetKernelArg(kernel, 0, sizeof(cl_mem), (void *)&buffer);
         error = clSetKernelArg(kernel, 1, sizeof(cl_uint), (void *)&height);
         error = clSetKernelArg(kernel, 2, sizeof(cl_uint), (void *)&width);
-        error = clSetKernelArg(kernel, 3, sizeof(cl_double), (void *)&xoffset);
-        error = clSetKernelArg(kernel, 4, sizeof(cl_double), (void *)&yoffset);
-        error = clSetKernelArg(kernel, 5, sizeof(cl_double), (void *)&zoom);
+        error = clSetKernelArg(kernel, 3, sizeof(cl_float), (void *)&xoffset);
+        error = clSetKernelArg(kernel, 4, sizeof(cl_float), (void *)&yoffset);
+        error = clSetKernelArg(kernel, 5, sizeof(cl_float), (void *)&zoom);
 
         // Queue the job
         size_t global_size = height * width;
@@ -320,12 +351,17 @@ int main(int argc, char *argv[]) {
             goto exit;
         }
 
+        printf("Zoom: %f\n", zoom);
+        printf("Top left: %d, %d, %d\n", pixels[0], pixels[1], pixels[2]);
+        printf("Top left: %d, %d, %d\n", pixels[3], pixels[4], pixels[5]);
+        printf("Top left: %d, %d, %d\n", pixels[6], pixels[7], pixels[8]);
+        printf("Top left: %d, %d, %d\n\n", pixels[9], pixels[10], pixels[11]);
+
         // Clear the screen
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
 
         // Render font
-
         sprintf(fps_text+5, "%.2f", fps);
         text_surface = TTF_RenderText_Solid(font, fps_text,text_colour);
         SDL_BlitSurface(text_surface, NULL, surface, NULL);
