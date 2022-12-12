@@ -19,63 +19,90 @@
 #define CONTROLLER_OFFSET_SCALAR 0.1
 
 const char *kernel_string =
-"__kernel void mandelbrot_kernel(__global float *A)"
-"{"
-"}"
-"";
+"int mandelbrot(float x, float y) {"
+    "float c_real = x;"
+    "float c_imag = y;"
+    "float z_real = 0;"
+    "float z_imag = 0;"
 
-uint8_t pixels[MAX_HEIGHT * MAX_WIDTH * CHANNELS];
+    "int iterations = 0;"
+    "int max_iterations = 600;"
+
+    "float z_real_squared = 0;"
+    "float z_imag_squared = 0;"
+
+    "while (z_real_squared + z_imag_squared < 4 && iterations <= max_iterations) {"
+        "z_real_squared = z_real * z_real;"
+        "z_imag_squared = z_imag * z_imag;"
+        "z_imag = 2 * z_real * z_imag + c_imag;"
+        "z_real = z_real_squared - z_imag_squared + c_real;"
+        "iterations++;"
+    "}"
+
+  "return iterations;"
+"}"
+
+"float normalise_int(int value, int min, int max, float out_min, float out_max) {"
+    "return (float)(value - min) / (float)(max - min) * (out_max - out_min) + out_min;"
+"}"
+
+"void colourmap(int iintensity, uchar *red, uchar *green, uchar *blue) {"
+  "float intensity = normalise_int(iintensity, 0, 600, 0, 1);"
+  "if (intensity < 0.25) {"
+    "// black to blue\n"
+    "*red = 0;"
+    "*green = 0;"
+    "*blue = (uchar)(intensity * 4 * 255);"
+  "} else if (intensity < 0.5) {"
+    "// blue to green\n"
+    "*red = 0;"
+    "*green = (uchar)((intensity - 0.25) * 4 * 255);"
+    "*blue = 255;"
+  "} else if (intensity < 0.75) {"
+    "// green to yellow\n"
+    "*red = (uchar)((intensity - 0.5) * 4 * 255);"
+    "*green = 255;"
+    "*blue = 255 - (uchar)((intensity - 0.5) * 4 * 255);"
+  "} else {"
+    "// yellow to white\n"
+    "*red = 255;"
+    "*green = 255;"
+    "*blue = (uchar)((1 - intensity) * 4 * 255);"
+  "}"
+"}"
+
+"__kernel void mandelbrot_kernel(__global uchar *out,"
+                                 "uint height,"
+                                 "uint width,"
+                                 "float xoffset,"
+                                 "float yoffset,"
+                                 "float zoom"
+")"
+"{"
+    "//Get the index of the work-item\n"
+    "long index = get_global_id(0) * 3;"
+
+    "// Get row, column from index\n"
+    "long j = (index / 3) % width;"
+    "long i = index / (3 * width);"
+
+    "float y = normalise_int(i, 0, height, -zoom, zoom);"
+    "float x = normalise_int(j, 0, width, -zoom, zoom);"
+    "int intensity = mandelbrot(x + xoffset, y + yoffset);"
+
+    "// Convert to colourmap\n"
+    "uchar r, g, b;"
+    "colourmap(intensity, &r, &g, &b);"
+
+    "*(out + index    ) = r;"
+    "*(out + index + 1) = g;"
+    "*(out + index + 2) = b;"
+"}";
+
+cl_uchar pixels[MAX_HEIGHT * MAX_WIDTH * CHANNELS];
 
 double normalise_int(int value, int min, int max, double out_min, double out_max) {
   return (double)(value - min) / (double)(max - min) * (out_max - out_min) + out_min;
-}
-
-
-int mandelbrot(double x, double y) {
-  double c_real = x;
-  double c_imag = y;
-  double z_real = 0;
-  double z_imag = 0;
-
-  int iterations = 0;
-  int max_iterations = 200;
-
-  double z_real_squared = 0;
-  double z_imag_squared = 0;
-
-  while (z_real_squared + z_imag_squared < 4 && iterations < max_iterations) {
-    z_real_squared = z_real * z_real;
-    z_imag_squared = z_imag * z_imag;
-    z_imag = 2 * z_real * z_imag + c_imag;
-    z_real = z_real_squared - z_imag_squared + c_real;
-    iterations++;
-  }
-
-  return iterations;
-}
-
-void colourmap(double intensity, uint8_t *red, uint8_t *green, uint8_t *blue) {
-  if (intensity < 0.25) {
-    // black to blue
-    *red = 0;
-    *green = 0;
-    *blue = (int)(intensity * 4 * 255);
-  } else if (intensity < 0.5) {
-    // blue to green
-    *red = 0;
-    *green = (int)((intensity - 0.25) * 4 * 255);
-    *blue = 255;
-  } else if (intensity < 0.75) {
-    // green to yellow
-    *red = (int)((intensity - 0.5) * 4 * 255);
-    *green = 255;
-    *blue = 255 - (int)((intensity - 0.5) * 4 * 255);
-  } else {
-    // yellow to white
-    *red = 255;
-    *green = 255;
-    *blue = (int)((1 - intensity) * 4 * 255);
-  }
 }
 
 int main(int argc, char *argv[]) {
@@ -88,10 +115,10 @@ int main(int argc, char *argv[]) {
 
     SDL_Color text_colour = {0, 255, 0};
 
-    int width = 960;
-    int height = 640;
-    double xoffset = 0, yoffset = 0;
-    double zoom = 1;
+    cl_uint width = 960;
+    cl_uint height = 640;
+    cl_float xoffset = 0, yoffset = 0;
+    cl_float zoom = 1;
     double fps = 0;
     char fps_text[20] = "fps: ";
 
@@ -268,31 +295,28 @@ int main(int argc, char *argv[]) {
         zoom *= normalise_int(ltrigger, -CONTROLLER_MAXIMUM, CONTROLLER_MAXIMUM, 0.1, 2);
         zoom /= normalise_int(rtrigger, -CONTROLLER_MAXIMUM, CONTROLLER_MAXIMUM, 0.1, 2);
 
-        error = clEnqueueReadBuffer(queue, buffer, 1, 0, width * height, pixels, 0, NULL, NULL);
+        // Set kernel arguments
+        error = clSetKernelArg(kernel, 0, sizeof(cl_mem), (void *)&buffer);
+        error = clSetKernelArg(kernel, 1, sizeof(cl_uint), (void *)&height);
+        error = clSetKernelArg(kernel, 2, sizeof(cl_uint), (void *)&width);
+        error = clSetKernelArg(kernel, 3, sizeof(cl_float), (void *)&xoffset);
+        error = clSetKernelArg(kernel, 4, sizeof(cl_float), (void *)&yoffset);
+        error = clSetKernelArg(kernel, 5, sizeof(cl_float), (void *)&zoom);
+
+        // Queue the job
+        size_t global_size = height * width;
+        size_t local_size = 128;
+        error = clEnqueueNDRangeKernel(queue, kernel, 1, NULL, &global_size, &local_size, 0, NULL, NULL);
         if (error != CL_SUCCESS) {
-            printf("Error enqueueing read: %d\n", error);
+            printf("Error enqueueing job: %d\n", error);
             goto exit;
         }
 
-        // Modify the pixel grid for display
-        for (int p=0; p<height*width*CHANNELS; p+=CHANNELS)
-        {
-            // Get row, column from index
-            int j = (p / CHANNELS) % width;
-            int i = p / (CHANNELS * width);
-
-            // Calculate Mandelbrot
-            double y = normalise_int(i, 0, height, -zoom, zoom);
-            double x = normalise_int(j, 0, width, -zoom, zoom);
-            uint8_t intensity = mandelbrot(x + xoffset, y + yoffset);
-
-            // Convert to colourmap
-            uint8_t r, g, b;
-            colourmap((double)intensity / 255, &r, &g, &b);
-
-            pixels[p    ] = r;
-            pixels[p + 1] = g;
-            pixels[p + 2] = b;
+        // Read (with blocking) from the buffer
+        error = clEnqueueReadBuffer(queue, buffer, 1, 0, height * width * CHANNELS, pixels, 0, NULL, NULL);
+        if (error != CL_SUCCESS) {
+            printf("Error enqueueing read: %d\n", error);
+            goto exit;
         }
 
         // Clear the screen
