@@ -10,18 +10,26 @@
 #include <math.h>
 #include <complex.h>
 
-#define MAX_WIDTH 640
-#define MAX_HEIGHT 640
+#define MAX_WIDTH 1280
+#define MAX_HEIGHT 1080
 #define CHANNELS 3
+#define BUFFER_SIZE MAX_HEIGHT * MAX_WIDTH * CHANNELS
 
 #define CONTROLLER_MAXIMUM 32768
 #define CONTROLLER_OFFSET_SCALAR 0.1
+
+const char *kernel_string =
+"__kernel void mandelbrot_kernel(__global float *A)"
+"{"
+"}"
+"";
 
 uint8_t pixels[MAX_HEIGHT * MAX_WIDTH * CHANNELS];
 
 double normalise_int(int value, int min, int max, double out_min, double out_max) {
   return (double)(value - min) / (double)(max - min) * (out_max - out_min) + out_min;
 }
+
 
 int mandelbrot(double x, double y) {
   double c_real = x;
@@ -70,7 +78,6 @@ void colourmap(double intensity, uint8_t *red, uint8_t *green, uint8_t *blue) {
   }
 }
 
-
 int main(int argc, char *argv[]) {
     SDL_Window *window = NULL;
     SDL_Renderer *renderer = NULL;
@@ -81,20 +88,21 @@ int main(int argc, char *argv[]) {
 
     SDL_Color text_colour = {0, 255, 0};
 
-    int width = 540;
-    int height = 360;
+    int width = 960;
+    int height = 640;
     double xoffset = 0, yoffset = 0;
     double zoom = 1;
     double fps = 0;
     char fps_text[20] = "fps: ";
+
 
     // Get the platform ID and the number of platforms
     cl_platform_id platform_id;
     cl_uint num_platforms;
     cl_int error = clGetPlatformIDs(1, &platform_id, &num_platforms);
     if (error != CL_SUCCESS) {
-    printf("Error getting platform ID: %d\n", error);
-    return 1;
+        printf("Error getting platform ID: %d\n", error);
+        return 1;
     }
 
     // Get the device IDs and the number of devices for each platform
@@ -115,28 +123,74 @@ int main(int argc, char *argv[]) {
 
     // Log the device information
     for (int i = 0; i < num_devices; i++) {
-    // Get the device name
-    size_t size;
-    error = clGetDeviceInfo(device_ids[i], CL_DEVICE_NAME, 0, NULL, &size);
+        // Get the device name
+        size_t size;
+        error = clGetDeviceInfo(device_ids[i], CL_DEVICE_NAME, 0, NULL, &size);
+        if (error != CL_SUCCESS) {
+            printf("Error getting device name size: %d\n", error);
+            continue;
+        }
+
+        char *name = malloc(size);
+        error = clGetDeviceInfo(device_ids[i], CL_DEVICE_NAME, size, name, NULL);
+        if (error != CL_SUCCESS) {
+            printf("Error getting device name: %d\n", error);
+            continue;
+        }
+
+        // Log the device name
+        printf("Device %d: %s\n", i, name);
+
+        free(name);
+    }
+    cl_device_id device_id = device_ids[1];
+
+    cl_context context;
+    context = clCreateContext( NULL, num_devices, device_ids, NULL, NULL, &error);
     if (error != CL_SUCCESS) {
-      printf("Error getting device name size: %d\n", error);
-      continue;
+      printf("Error creating context: %d\n", error);
+      return 1;
     }
 
-    char *name = malloc(size);
-    error = clGetDeviceInfo(device_ids[i], CL_DEVICE_NAME, size, name, NULL);
+    cl_command_queue queue = clCreateCommandQueueWithProperties(context, device_id, NULL, &error);
     if (error != CL_SUCCESS) {
-      printf("Error getting device name: %d\n", error);
-      continue;
+        printf("Error creating command queue: %d\n", error);
+        return 1;
     }
 
-    // Log the device name
-    printf("Device %d: %s\n", i, name);
-
-    free(name);
+    // Allocate memory for the data on the GPU
+    cl_mem buffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY, BUFFER_SIZE, NULL, &error);
+    if (error != CL_SUCCESS) {
+        printf("Error allocating buffer: %d\n", error);
+        return 1;
     }
 
-    free(device_ids);
+    // Create a program from the kernel source
+    cl_program program = clCreateProgramWithSource(context, 1, &kernel_string, NULL, &error);
+    if (error != CL_SUCCESS) {
+        printf("Error creating program from kernel source: %d\n", error);
+        return 1;
+    }
+
+    // Build the program
+    error = clBuildProgram(program, num_devices, device_ids, NULL, NULL, NULL);
+    if (error != CL_SUCCESS) {
+        printf("Error building program: %d\n", error);
+
+        // Display build log
+        size_t log_size;
+        clGetProgramBuildInfo(program, device_id, CL_PROGRAM_BUILD_LOG, 0, NULL, &log_size);
+        char *log = (char *) malloc(log_size);
+        clGetProgramBuildInfo(program, device_id, CL_PROGRAM_BUILD_LOG, log_size, log, NULL);
+        printf("%s\n", log);
+    }
+
+    // Create the OpenCL kernel object
+    cl_kernel kernel = clCreateKernel(program, "mandelbrot_kernel", &error);
+    if (error != CL_SUCCESS) {
+        printf("Error creating kernel object: %d\n", error);
+        return 1;
+    }
 
     // Initialize SDL
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) < 0) {
@@ -213,6 +267,12 @@ int main(int argc, char *argv[]) {
         yoffset += normalise_int(yaxis, -CONTROLLER_MAXIMUM, CONTROLLER_MAXIMUM, -CONTROLLER_OFFSET_SCALAR * zoom, CONTROLLER_OFFSET_SCALAR * zoom);
         zoom *= normalise_int(ltrigger, -CONTROLLER_MAXIMUM, CONTROLLER_MAXIMUM, 0.1, 2);
         zoom /= normalise_int(rtrigger, -CONTROLLER_MAXIMUM, CONTROLLER_MAXIMUM, 0.1, 2);
+
+        error = clEnqueueReadBuffer(queue, buffer, 1, 0, width * height, pixels, 0, NULL, NULL);
+        if (error != CL_SUCCESS) {
+            printf("Error enqueueing read: %d\n", error);
+            goto exit;
+        }
 
         // Modify the pixel grid for display
         for (int p=0; p<height*width*CHANNELS; p+=CHANNELS)
