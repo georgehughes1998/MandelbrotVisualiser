@@ -16,20 +16,20 @@
 #define BUFFER_SIZE MAX_HEIGHT * MAX_WIDTH * CHANNELS
 
 #define CONTROLLER_MAXIMUM 32768
-#define CONTROLLER_OFFSET_SCALAR 0.1
+#define CONTROLLER_OFFSET_SCALAR 0.08
 
 const char *kernel_string =
-"int mandelbrot(float x, float y) {"
-    "float c_real = x;"
-    "float c_imag = y;"
-    "float z_real = 0;"
-    "float z_imag = 0;"
+"int mandelbrot(double x, double y) {"
+    "double c_real = x;"
+    "double c_imag = y;"
+    "double z_real = 0;"
+    "double z_imag = 0;"
 
     "int iterations = 0;"
-    "int max_iterations = 600;"
+    "int max_iterations = 800;"
 
-    "float z_real_squared = 0;"
-    "float z_imag_squared = 0;"
+    "double z_real_squared = 0;"
+    "double z_imag_squared = 0;"
 
     "while (z_real_squared + z_imag_squared < 4 && iterations <= max_iterations) {"
         "z_real_squared = z_real * z_real;"
@@ -42,12 +42,12 @@ const char *kernel_string =
   "return iterations;"
 "}"
 
-"float normalise_int(int value, int min, int max, float out_min, float out_max) {"
-    "return (float)(value - min) / (float)(max - min) * (out_max - out_min) + out_min;"
+"double normalise_int(int value, int min, int max, double out_min, double out_max) {"
+    "return (double)(value - min) / (double)(max - min) * (out_max - out_min) + out_min;"
 "}"
 
 "void colourmap(int iintensity, uchar *red, uchar *green, uchar *blue) {"
-  "float intensity = normalise_int(iintensity, 0, 600, 0, 1);"
+  "double intensity = normalise_int(iintensity, 0, 800, 0, 1);"
   "if (intensity < 0.25) {"
     "// black to blue\n"
     "*red = 0;"
@@ -74,9 +74,9 @@ const char *kernel_string =
 "__kernel void mandelbrot_kernel(__global uchar *out,"
                                  "uint height,"
                                  "uint width,"
-                                 "float xoffset,"
-                                 "float yoffset,"
-                                 "float zoom"
+                                 "double xoffset,"
+                                 "double yoffset,"
+                                 "double zoom"
 ")"
 "{"
     "//Get the index of the work-item\n"
@@ -86,8 +86,8 @@ const char *kernel_string =
     "long j = (index / 3) % width;"
     "long i = index / (3 * width);"
 
-    "float y = normalise_int(i, 0, height, -zoom, zoom);"
-    "float x = normalise_int(j, 0, width, -zoom, zoom);"
+    "double y = normalise_int(i, 0, height, -zoom, zoom);"
+    "double x = normalise_int(j, 0, width, -zoom, zoom);"
     "int intensity = mandelbrot(x + xoffset, y + yoffset);"
 
     "// Convert to colourmap\n"
@@ -115,10 +115,10 @@ int main(int argc, char *argv[]) {
 
     SDL_Color text_colour = {0, 255, 0};
 
-    cl_uint width = 960;
-    cl_uint height = 640;
-    cl_float xoffset = 0, yoffset = 0;
-    cl_float zoom = 1;
+    cl_uint width = 1280;
+    cl_uint height = 720;
+    cl_double xoffset = 0, yoffset = 0;
+    cl_double zoom = 1;
     double fps = 0;
     char fps_text[20] = "fps: ";
 
@@ -231,6 +231,7 @@ int main(int argc, char *argv[]) {
         printf("Error creating window: %s\n", SDL_GetError());
         return 1;
     }
+    SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN);
 
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     if (renderer == NULL) {
@@ -299,9 +300,9 @@ int main(int argc, char *argv[]) {
         error = clSetKernelArg(kernel, 0, sizeof(cl_mem), (void *)&buffer);
         error = clSetKernelArg(kernel, 1, sizeof(cl_uint), (void *)&height);
         error = clSetKernelArg(kernel, 2, sizeof(cl_uint), (void *)&width);
-        error = clSetKernelArg(kernel, 3, sizeof(cl_float), (void *)&xoffset);
-        error = clSetKernelArg(kernel, 4, sizeof(cl_float), (void *)&yoffset);
-        error = clSetKernelArg(kernel, 5, sizeof(cl_float), (void *)&zoom);
+        error = clSetKernelArg(kernel, 3, sizeof(cl_double), (void *)&xoffset);
+        error = clSetKernelArg(kernel, 4, sizeof(cl_double), (void *)&yoffset);
+        error = clSetKernelArg(kernel, 5, sizeof(cl_double), (void *)&zoom);
 
         // Queue the job
         size_t global_size = height * width;
